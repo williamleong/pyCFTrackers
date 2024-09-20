@@ -1,11 +1,11 @@
-import mxnet as mx
+#import mxnet as mx
+import tensorflow as tf
 import numpy as np
 import pickle
 import os
 import cv2
-from mxnet.gluon.model_zoo import vision
-from mxnet.gluon.nn import AvgPool2D
-import mxnet as mx
+#from mxnet.gluon.model_zoo import vision
+#from mxnet.gluon.nn import AvgPool2D
 
 from ..config import gpu_config
 from . import _gradient
@@ -89,17 +89,21 @@ class CNNFeature(Feature):
             img = cv2.cvtColor(img.squeeze(), cv2.COLOR_GRAY2RGB)
         if not isinstance(scales, list) and not isinstance(scales, np.ndarray):
             scales = [scales]
-        patches = []
+        patches = [self._sample_patch(img, pos, sample_sz * scale, sample_sz) for scale in scales]
+        """
         for scale in scales:
             patch = self._sample_patch(img, pos, sample_sz*scale, sample_sz)
             patch = mx.nd.array(patch / 255., ctx=self._ctx)
+
+            # why are these values hard-coded?
             normalized = mx.image.color_normalize(patch,
                                                   mean=mx.nd.array([0.485, 0.456, 0.406], ctx=self._ctx),
                                                   std=mx.nd.array([0.229, 0.224, 0.225], ctx=self._ctx))
             normalized = normalized.transpose((2, 0, 1)).expand_dims(axis=0)
             patches.append(normalized)
         patches = mx.nd.concat(*patches, dim=0)
-        f1, f2 = self._forward(patches)
+        """
+        f1, f2 = self._forward(tf.stack(patches))
         f1 = self._feature_normalization(f1)
         f2 = self._feature_normalization(f2)
         return f1, f2
@@ -108,8 +112,9 @@ class ResNet50Feature(CNNFeature):
 
     def __init__(self, fname, compressed_dim,config=otb_deep_config.OTBDeepConfig()):
         super(ResNet50Feature,self).__init__(config)
-        self._ctx = mx.gpu(gpu_config.gpu_id) if gpu_config.use_gpu else mx.cpu(0)
-        self._resnet50 = vision.resnet50_v2(pretrained=True, ctx = self._ctx)
+        #self._ctx = mx.gpu(gpu_config.gpu_id) if gpu_config.use_gpu else mx.cpu(0)
+        #self._resnet50 = vision.resnet50_v2(pretrained=True, ctx = self._ctx)
+        self._resnet50 = tf.keras.applications.ResNet50V2()
         self._compressed_dim = compressed_dim
         self._cell_size = [4, 16]
         self.penalty = [0., 0.]
@@ -137,6 +142,7 @@ class ResNet50Feature(CNNFeature):
         return img_sample_sz
 
     def _forward(self, x):
+        """
         # stage1
         bn0 = self._resnet50.features[0].forward(x)
         conv1 = self._resnet50.features[1].forward(bn0)     # x2
@@ -149,17 +155,24 @@ class ResNet50Feature(CNNFeature):
         stage4 = self._resnet50.features[7].forward(stage3) # x16
         return [pool1.asnumpy().transpose(2, 3, 1, 0),
                 stage4.asnumpy().transpose(2, 3, 1, 0)]
+        """
+        resnetv2_inputs = tf.keras.applications.resnet_v2.preprocess_input(x)
+        # first argument will require another instantiation of resnet50v2, with include_top=False 
+        #     and pooling=None. 
+        # hopefully we can make do without the first output for now, to save time
+        return [None, self._resnet50(resnetv2_inputs)] 
 
 class VGG16Feature(CNNFeature):
     def __init__(self, fname, compressed_dim,config=otb_deep_config.OTBDeepConfig()):
         super(VGG16Feature,self).__init__(config)
-        self._ctx = mx.gpu(gpu_config.gpu_id) if gpu_config.use_gpu else mx.cpu(0)
-        self._vgg16 = vision.vgg16(pretrained=True, ctx=self._ctx)
+        #self._ctx = mx.gpu(gpu_config.gpu_id) if gpu_config.use_gpu else mx.cpu(0)
+        #self._vgg16 = vision.vgg16(pretrained=True, ctx=self._ctx)
+        self._vgg16 = tf.keras.applications.VGG16()
         self._compressed_dim = compressed_dim
         self._cell_size = [4, 16]
         self.penalty = [0., 0.]
         self.min_cell_size = np.min(self._cell_size)
-        self._avg_pool2d = AvgPool2D()
+        #self._avg_pool2d = AvgPool2D()
 
     def init_size(self, img_sample_sz, cell_size=None):
         img_sample_sz = img_sample_sz.astype(np.int32)
@@ -174,6 +187,7 @@ class VGG16Feature(CNNFeature):
         return img_sample_sz
 
     def _forward(self, x):
+        """
         # stage1
         conv1_1 = self._vgg16.features[0].forward(x)
         relu1_1 = self._vgg16.features[1].forward(conv1_1)
@@ -205,6 +219,12 @@ class VGG16Feature(CNNFeature):
         pool4 = self._vgg16.features[23].forward(relu4_3) # x16
         return [pool_avg.asnumpy().transpose(2, 3, 1, 0),
                 pool4.asnumpy().transpose(2, 3, 1, 0)]
+        """
+        # first argument will require another instantiation of vgg16, with include_top=False 
+        #     and pooling=avg. 
+        # hopefully we can make do without the first output for now, to save time
+        vgg16_inputs = tf.keras.applications.vgg16.preprocess_input(x)
+        return [None, self._vgg16(vgg16_inputs)]
 
 
 def fhog(I, bin_size=8, num_orients=9, clip=0.2, crop=False):
