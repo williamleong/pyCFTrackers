@@ -8,7 +8,15 @@
 #include <math.h>
 #include <stdio.h>
 #include "string.h"
-#include "sse.hpp"
+
+//SSE not supported on ARM
+# https://stackoverflow.com/questions/34747838/how-to-tell-if-program-is-running-on-x86-x64-or-arm-linux-platforms
+#ifdef __x86_64__    
+  #include "sse.hpp"  
+#elif __arm__
+  //https://github.com/DLTcollab/sse2neon
+  #include "sse2neon.h"
+#endif    
 
 #define PI 3.14159265f
 
